@@ -2,6 +2,7 @@
 <html lang="vi">
 <head>
 <meta charset="utf-8">
+<meta name="referrer" content="no-referrer">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Đọc chính tả</title>
 <style>
@@ -108,12 +109,20 @@ function speak(){
     else{rep=0;idx++;timer=setTimeout(speak,(parseFloat($('p2').value)||0)*1000)}
   };
   if($('voice').value==='online'){
-    var url='https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=vi&q='+encodeURIComponent(chunks[idx]);
-    aud=new Audio(url);
-    aud.playbackRate=parseFloat($('rate').value);
-    aud.onended=done;
-    aud.onerror=function(){if(my===token){$('status').textContent='Không tải được giọng online. Kiểm tra mạng hoặc chọn giọng máy.'}};
-    aud.play().catch(function(){});
+    var clients=['tw-ob','gtx'];
+    var tryPlay=function(k){
+      var url='https://translate.google.com/translate_tts?ie=UTF-8&client='+clients[k]+'&tl=vi&q='+encodeURIComponent(chunks[idx]);
+      aud=new Audio(url);
+      aud.playbackRate=parseFloat($('rate').value);
+      aud.onended=done;
+      aud.onerror=function(){
+        if(my!==token)return;
+        if(k+1<clients.length)tryPlay(k+1);
+        else $('status').textContent='Không tải được giọng online. Hãy chọn một giọng máy trong danh sách.';
+      };
+      aud.play().catch(function(){});
+    };
+    tryPlay(0);
     return;
   }
   var u=new SpeechSynthesisUtterance(chunks[idx]);
