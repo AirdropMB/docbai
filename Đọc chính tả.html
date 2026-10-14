@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Đọc chính tả</title>
+<style>
+:root{--bg:#faf9f6;--card:#fff;--text:#1f1d1a;--muted:#6b665e;--line:#ddd8cf;--accent:#c4623f;--accent-t:#fff;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1b1a18;--card:#262421;--text:#f0ede6;--muted:#a09a8f;--line:#3a3732}}
+:root[data-theme="dark"]{--bg:#1b1a18;--card:#262421;--text:#f0ede6;--muted:#a09a8f;--line:#3a3732}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;line-height:1.5}
+main{max-width:720px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:1.4rem;margin:0 0 4px}
+p.sub{color:var(--muted);margin:0 0 16px;font-size:.9rem}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:14px}
+textarea{width:100%;min-height:150px;resize:vertical;border:1px solid var(--line);border-radius:8px;padding:10px;font:inherit;background:var(--bg);color:var(--text)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
+label{display:flex;flex-direction:column;font-size:.8rem;color:var(--muted);gap:4px}
+input[type=number],select{font:inherit;padding:7px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);width:100%}
+input[type=range]{width:100%}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+button{font:inherit;padding:9px 16px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--text);cursor:pointer}
+button.primary{background:var(--accent);color:var(--accent-t);border-color:var(--accent)}
+.now{font-size:1.5rem;text-align:center;padding:22px 10px;min-height:80px;display:flex;align-items:center;justify-content:center}
+.status{text-align:center;color:var(--muted);font-size:.9rem}
+.bar{height:6px;background:var(--line);border-radius:3px;margin:10px 0;overflow:hidden}
+.bar>div{height:100%;width:0;background:var(--accent);transition:width .2s}
+.chk{flex-direction:row;align-items:center;gap:6px;font-size:.9rem;color:var(--text)}
+</style>
+</head>
+<body>
+<main>
+<h1>Đọc chính tả</h1>
+<p class="sub">Dán văn bản, chọn số từ mỗi lần đọc và số lần lặp, rồi bấm Bắt đầu.</p>
+
+<div class="card">
+<textarea id="text" placeholder="Dán hoặc nhập văn bản vào đây..."></textarea>
+</div>
+
+<div class="card">
+<div class="grid">
+<label>Số từ mỗi lần: từ<input type="number" id="min" value="3" min="1" max="50"></label>
+<label>đến<input type="number" id="max" value="5" min="1" max="50"></label>
+<label>Lặp lại (lần)<input type="number" id="rep" value="2" min="1" max="20"></label>
+<label>Nghỉ giữa các lần lặp (giây)<input type="number" id="p1" value="3" min="0" step="0.5"></label>
+<label>Nghỉ trước cụm kế tiếp (giây)<input type="number" id="p2" value="4" min="0" step="0.5"></label>
+</div>
+<div class="grid" style="margin-top:10px">
+<label>Giọng đọc<select id="voice"></select></label>
+<label>Tốc độ: <span id="rv">0.9</span><input type="range" id="rate" min="0.5" max="1.5" step="0.1" value="0.9"></label>
+</div>
+<div class="row" style="margin-top:10px">
+<label class="chk"><input type="checkbox" id="show" checked> Hiện cụm đang đọc</label>
+</div>
+</div>
+
+<div class="card">
+<div class="now" id="now">—</div>
+<div class="bar"><div id="prog"></div></div>
+<div class="status" id="status">Sẵn sàng</div>
+<div class="row" style="justify-content:center;margin-top:12px">
+<button onclick="prev()">⏮</button>
+<button class="primary" id="go" onclick="startPlay()">▶ Bắt đầu</button>
+<button onclick="pauseResume()" id="pz">⏸ Tạm dừng</button>
+<button onclick="stopAll()">⏹ Dừng</button>
+<button onclick="next()">⏭</button>
+</div>
+</div>
+</main>
+<script>
+var chunks=[],idx=0,rep=0,state='stop',timer=null,token=0;
+var $=function(i){return document.getElementById(i)};
+var voices=[],aud=null;
+function loadVoices(){
+  voices=('speechSynthesis' in window)?speechSynthesis.getVoices():[];
+  var sel=$('voice'),cur=sel.value||'online';sel.innerHTML='';
+  var o0=document.createElement('option');o0.value='online';o0.textContent='Giọng tiếng Việt online (dùng được mọi máy)';sel.appendChild(o0);
+  voices.map(function(v,i){return{v:v,i:i}}).forEach(function(o){var op=document.createElement('option');op.value=o.i;op.textContent='Giọng máy: '+o.v.name+' ('+o.v.lang+')';sel.appendChild(op)});
+  sel.value=cur;
+}
+loadVoices();
+if('speechSynthesis' in window){speechSynthesis.onvoiceschanged=loadVoices}
+$('rate').oninput=function(){$('rv').textContent=this.value};
+
+function build(){
+  var words=$('text').value.trim().split(/\s+/).filter(Boolean);
+  var a=Math.max(1,parseInt($('min').value)||1),b=Math.max(a,parseInt($('max').value)||a);
+  chunks=[];var i=0;
+  while(i<words.length){var n=a+Math.floor(Math.random()*(b-a+1));chunks.push(words.slice(i,i+n).join(' '));i+=n}
+}
+function ui(){
+  var r=Math.max(1,parseInt($('rep').value)||1);
+  $('now').textContent=chunks.length&&$('show').checked?chunks[idx]||'—':(chunks.length?'• • •':'—');
+  $('prog').style.width=chunks.length?(idx/chunks.length*100)+'%':'0';
+  $('status').textContent=chunks.length?('Cụm '+Math.min(idx+1,chunks.length)+'/'+chunks.length+' · lần đọc '+Math.min(rep+1,r)+'/'+r):'Sẵn sàng';
+}
+function speak(){
+  if(state!=='play')return;
+  if(idx>=chunks.length){state='stop';$('prog').style.width='100%';$('status').textContent='Đã đọc xong ✔';$('go').textContent='▶ Bắt đầu';return}
+  ui();
+  var my=++token;
+  var done=function(){
+    if(my!==token||state!=='play')return;
+    var r=Math.max(1,parseInt($('rep').value)||1);
+    rep++;
+    if(rep<r)timer=setTimeout(speak,(parseFloat($('p1').value)||0)*1000);
+    else{rep=0;idx++;timer=setTimeout(speak,(parseFloat($('p2').value)||0)*1000)}
+  };
+  if($('voice').value==='online'){
+    var url='https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=vi&q='+encodeURIComponent(chunks[idx]);
+    aud=new Audio(url);
+    aud.playbackRate=parseFloat($('rate').value);
+    aud.onended=done;
+    aud.onerror=function(){if(my===token){$('status').textContent='Không tải được giọng online. Kiểm tra mạng hoặc chọn giọng máy.'}};
+    aud.play().catch(function(){});
+    return;
+  }
+  var u=new SpeechSynthesisUtterance(chunks[idx]);
+  var v=voices[$('voice').value];
+  if(v){u.voice=v;u.lang=v.lang}else u.lang='vi-VN';
+  u.rate=parseFloat($('rate').value);
+  u.onend=done;
+  speechSynthesis.speak(u);
+}
+function halt(){token++;clearTimeout(timer);if(aud){aud.onended=null;aud.pause();aud=null}if('speechSynthesis' in window)speechSynthesis.cancel()}
+function startPlay(){
+  halt();build();idx=0;rep=0;
+  if(!chunks.length){$('status').textContent='Hãy nhập văn bản trước.';return}
+  state='play';$('go').textContent='↻ Bắt đầu lại';$('pz').textContent='⏸ Tạm dừng';speak();
+}
+function pauseResume(){
+  if(state==='play'){state='pause';halt();$('pz').textContent='▶ Tiếp tục';$('status').textContent+=' · tạm dừng'}
+  else if(state==='pause'){state='play';$('pz').textContent='⏸ Tạm dừng';speak()}
+}
+function stopAll(){halt();state='stop';idx=0;rep=0;$('pz').textContent='⏸ Tạm dừng';$('go').textContent='▶ Bắt đầu';ui()}
+function jump(d){
+  if(!chunks.length)return;
+  var was=state;halt();idx=Math.max(0,Math.min(chunks.length-1,idx+d));rep=0;ui();
+  if(was==='play'){state='play';speak()}
+}
+function next(){jump(1)}
+function prev(){jump(-1)}
+</script>
+</body>
+</html>
