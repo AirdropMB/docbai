@@ -18,7 +18,7 @@ p.sub{color:var(--muted);margin:0 0 16px;font-size:.9rem}
 textarea{width:100%;min-height:150px;resize:vertical;border:1px solid var(--line);border-radius:8px;padding:10px;font:inherit;background:var(--bg);color:var(--text)}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
 label{display:flex;flex-direction:column;font-size:.8rem;color:var(--muted);gap:4px}
-input[type=number],select{font:inherit;padding:7px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);width:100%}
+input[type=number],input[type=text],select{font:inherit;padding:7px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);width:100%}
 input[type=range]{width:100%}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 button{font:inherit;padding:9px 16px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--text);cursor:pointer}
@@ -37,12 +37,17 @@ button.primary{background:var(--accent);color:var(--accent-t);border-color:var(-
 
 <div class="card">
 <textarea id="text" placeholder="Dán hoặc nhập văn bản vào đây..."></textarea>
+<div class="row" style="margin-top:10px">
+<button onclick="makeLink()">🔗 Tạo link chia sẻ</button>
+<input type="text" id="link" readonly placeholder="Link sẽ hiện ở đây" style="flex:1;min-width:160px" onclick="this.select()">
+<button onclick="copyLink()" id="cp">Sao chép</button>
+</div>
+<div class="status" id="shmsg" style="text-align:left;margin-top:6px"></div>
 </div>
 
 <div class="card">
 <div class="grid">
-<label>Số từ mỗi lần: từ<input type="number" id="min" value="3" min="1" max="50"></label>
-<label>đến<input type="number" id="max" value="5" min="1" max="50"></label>
+<label>Số từ mỗi lần<input type="number" id="min" value="4" min="1" max="50"></label>
 <label>Lặp lại (lần)<input type="number" id="rep" value="2" min="1" max="20"></label>
 <label>Nghỉ giữa các lần lặp (giây)<input type="number" id="p1" value="3" min="0" step="0.5"></label>
 <label>Nghỉ trước cụm kế tiếp (giây)<input type="number" id="p2" value="4" min="0" step="0.5"></label>
@@ -86,7 +91,7 @@ $('rate').oninput=function(){$('rv').textContent=this.value};
 
 function build(){
   var words=$('text').value.trim().split(/\s+/).filter(Boolean);
-  var a=Math.max(1,parseInt($('min').value)||1),b=Math.max(a,parseInt($('max').value)||a);
+  var a=Math.max(1,parseInt($('min').value)||1),b=a;
   chunks=[];var i=0;
   while(i<words.length){var n=a+Math.floor(Math.random()*(b-a+1));chunks.push(words.slice(i,i+n).join(' '));i+=n}
 }
@@ -150,6 +155,43 @@ function jump(d){
 }
 function next(){jump(1)}
 function prev(){jump(-1)}
+
+function b64u(b){var s='';for(var i=0;i<b.length;i++)s+=String.fromCharCode(b[i]);return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}
+function unb64u(str){str=str.replace(/-/g,'+').replace(/_/g,'/');while(str.length%4)str+='=';var b=atob(str),a=new Uint8Array(b.length);for(var i=0;i<b.length;i++)a[i]=b.charCodeAt(i);return a}
+async function pipe(bytes,stream){var rs=new Blob([bytes]).stream().pipeThrough(stream);return new Uint8Array(await new Response(rs).arrayBuffer())}
+async function makeLink(){
+  var t=$('text').value.trim();
+  if(!t){$('shmsg').textContent='Hãy nhập văn bản trước.';return}
+  var data=JSON.stringify({t:t,n:$('min').value,r:$('rep').value,a:$('p1').value,b:$('p2').value,s:$('rate').value});
+  var bytes=new TextEncoder().encode(data),tag='t';
+  try{if(window.CompressionStream){bytes=await pipe(bytes,new CompressionStream('deflate-raw'));tag='d'}}catch(e){bytes=new TextEncoder().encode(data);tag='t'}
+  var link=location.href.split('#')[0]+'#'+tag+'='+b64u(bytes);
+  $('link').value=link;
+  $('shmsg').textContent=link.length>8000?'Link khá dài ('+link.length+' ký tự), một số ứng dụng chat có thể cắt bớt. Nên chia văn bản ngắn hơn.':'Đã tạo link. Ai mở link này sẽ thấy đúng văn bản của bạn.';
+  copyLink();
+}
+function copyLink(){
+  var el=$('link');if(!el.value)return;
+  el.select();
+  var ok=function(){$('cp').textContent='Đã chép ✔';setTimeout(function(){$('cp').textContent='Sao chép'},1500)};
+  if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(el.value).then(ok,function(){try{document.execCommand('copy');ok()}catch(e){}})}
+  else{try{document.execCommand('copy');ok()}catch(e){}}
+}
+async function loadFromHash(){
+  var h=location.hash.slice(1);if(h.length<3)return;
+  try{
+    var tag=h[0],bytes=unb64u(h.slice(2));
+    if(tag==='d')bytes=await pipe(bytes,new DecompressionStream('deflate-raw'));
+    var o=JSON.parse(new TextDecoder().decode(bytes));
+    $('text').value=o.t||'';
+    if(o.n)$('min').value=o.n;if(o.r)$('rep').value=o.r;
+    if(o.a!=null)$('p1').value=o.a;if(o.b!=null)$('p2').value=o.b;
+    if(o.s){$('rate').value=o.s;$('rv').textContent=o.s}
+    $('shmsg').textContent='Đã tải văn bản từ link chia sẻ.';
+  }catch(e){$('shmsg').textContent='Link chia sẻ không hợp lệ hoặc bị cắt mất một phần.'}
+}
+loadFromHash();
+window.addEventListener('hashchange',loadFromHash);
 </script>
 </body>
 </html>
