@@ -51,6 +51,7 @@ button.primary{background:var(--accent);color:var(--accent-t);border-color:var(-
 <label>Lặp lại (lần)<input type="number" id="rep" value="2" min="1" max="20"></label>
 <label>Nghỉ giữa các lần lặp (giây)<input type="number" id="p1" value="3" min="0" step="0.5"></label>
 <label>Nghỉ trước cụm kế tiếp (giây)<input type="number" id="p2" value="4" min="0" step="0.5"></label>
+<label style="grid-column:1/-1">Bắt đầu đọc từ chữ/cụm từ (tùy chọn, để trống = đọc từ đầu)<input type="text" id="kw" placeholder="ví dụ: Tây Tiến"></label>
 </div>
 <div class="grid" style="margin-top:10px">
 <label>Giọng đọc<select id="voice"></select></label>
@@ -77,7 +78,7 @@ button.primary{background:var(--accent);color:var(--accent-t);border-color:var(-
 <script>
 var chunks=[],idx=0,rep=0,state='stop',timer=null,token=0;
 var $=function(i){return document.getElementById(i)};
-var voices=[],aud=null;
+var voices=[],player=null,wd=null,startNote='';
 function loadVoices(){
   voices=('speechSynthesis' in window)?speechSynthesis.getVoices():[];
   var sel=$('voice'),cur=sel.value||'online';sel.innerHTML='';
@@ -89,17 +90,39 @@ loadVoices();
 if('speechSynthesis' in window){speechSynthesis.onvoiceschanged=loadVoices}
 $('rate').oninput=function(){$('rv').textContent=this.value};
 
+function normA(w){return w.toLowerCase().replace(/[^\p{L}\p{N}]/gu,'')}
+function normB(w){return w.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/đ/g,'d').replace(/[^\p{L}\p{N}]/gu,'')}
+function findStart(words,kw,norm){
+  var toks=kw.trim().split(/\s+/).map(norm).filter(Boolean);
+  if(!toks.length)return -1;
+  var L=[];words.forEach(function(w,i){var n=norm(w);if(n)L.push({i:i,n:n})});
+  for(var p=0;p+toks.length<=L.length;p++){
+    var ok=true;for(var q=0;q<toks.length;q++){if(L[p+q].n!==toks[q]){ok=false;break}}
+    if(ok)return L[p].i;
+  }
+  return -1;
+}
 function build(){
   var words=$('text').value.trim().split(/\s+/).filter(Boolean);
+  startNote='';
+  var kw=($('kw').value||'').trim();
+  if(kw&&words.length){
+    var st=findStart(words,kw,normA);
+    if(st<0)st=findStart(words,kw,normB);
+    if(st<0)return 'Không tìm thấy "'+kw+'" trong văn bản.';
+    words=words.slice(st);
+    startNote=' · bắt đầu từ "'+kw+'"';
+  }
   var a=Math.max(1,parseInt($('min').value)||1),b=a;
   chunks=[];var i=0;
   while(i<words.length){var n=a+Math.floor(Math.random()*(b-a+1));chunks.push(words.slice(i,i+n).join(' '));i+=n}
+  return true;
 }
 function ui(){
   var r=Math.max(1,parseInt($('rep').value)||1);
   $('now').textContent=chunks.length&&$('show').checked?chunks[idx]||'—':(chunks.length?'• • •':'—');
   $('prog').style.width=chunks.length?(idx/chunks.length*100)+'%':'0';
-  $('status').textContent=chunks.length?('Cụm '+Math.min(idx+1,chunks.length)+'/'+chunks.length+' · lần đọc '+Math.min(rep+1,r)+'/'+r):'Sẵn sàng';
+  $('status').textContent=chunks.length?('Cụm '+Math.min(idx+1,chunks.length)+'/'+chunks.length+' · lần đọc '+Math.min(rep+1,r)+'/'+r+startNote):'Sẵn sàng';
 }
 function speak(){
   if(state!=='play')return;
@@ -107,6 +130,7 @@ function speak(){
   ui();
   var my=++token;
   var done=function(){
+    clearTimeout(wd);
     if(my!==token||state!=='play')return;
     var r=Math.max(1,parseInt($('rep').value)||1);
     rep++;
@@ -114,18 +138,35 @@ function speak(){
     else{rep=0;idx++;timer=setTimeout(speak,(parseFloat($('p2').value)||0)*1000)}
   };
   if($('voice').value==='online'){
+    if(!player)player=new Audio();
     var clients=['tw-ob','gtx'];
     var tryPlay=function(k){
-      var url='https://translate.google.com/translate_tts?ie=UTF-8&client='+clients[k]+'&tl=vi&q='+encodeURIComponent(chunks[idx]);
-      aud=new Audio(url);
-      aud.playbackRate=parseFloat($('rate').value);
-      aud.onended=done;
-      aud.onerror=function(){
-        if(my!==token)return;
-        if(k+1<clients.length)tryPlay(k+1);
-        else $('status').textContent='Không tải được giọng online. Hãy chọn một giọng máy trong danh sách.';
+      if(my!==token)return;
+      var failed=false;
+      var fail=function(){
+        if(failed||my!==token)return;failed=true;
+        if(k+1<clients.length){tryPlay(k+1);return}
+        clearTimeout(wd);state='pause';$('pz').textContent='▶ Tiếp tục';
+        $('status').textContent='Không tải được giọng online. Kiểm tra mạng, bấm Tiếp tục để thử lại hoặc chọn giọng máy.';
       };
-      aud.play().catch(function(){});
+      clearTimeout(wd);
+      player.onended=null;player.onerror=null;
+      player.src='https://translate.google.com/translate_tts?ie=UTF-8&client='+clients[k]+'&tl=vi&q='+encodeURIComponent(chunks[idx]);
+      player.defaultPlaybackRate=player.playbackRate=parseFloat($('rate').value);
+      player.onended=done;
+      player.onerror=fail;
+      wd=setTimeout(function(){if(my===token&&state==='play')done()},25000);
+      var p=player.play();
+      if(p&&p.catch)p.catch(function(e){
+        if(my!==token)return;
+        if(e&&e.name==='AbortError')return;
+        if(e&&e.name==='NotAllowedError'){
+          clearTimeout(wd);state='pause';$('pz').textContent='▶ Tiếp tục';
+          $('status').textContent='Trình duyệt chặn tự phát âm thanh. Bấm Tiếp tục để đọc tiếp.';
+          return;
+        }
+        fail();
+      });
     };
     tryPlay(0);
     return;
@@ -137,10 +178,14 @@ function speak(){
   u.onend=done;
   speechSynthesis.speak(u);
 }
-function halt(){token++;clearTimeout(timer);if(aud){aud.onended=null;aud.pause();aud=null}if('speechSynthesis' in window)speechSynthesis.cancel()}
+function halt(){token++;clearTimeout(timer);clearTimeout(wd);if(player){player.onended=null;player.onerror=null;player.pause()}if('speechSynthesis' in window)speechSynthesis.cancel()}
 function startPlay(){
-  halt();build();idx=0;rep=0;
+  halt();
+  var r=build();
+  if(r!==true){chunks=[];ui();$('status').textContent=r;return}
+  idx=0;rep=0;
   if(!chunks.length){$('status').textContent='Hãy nhập văn bản trước.';return}
+  if(!player)player=new Audio();
   state='play';$('go').textContent='↻ Bắt đầu lại';$('pz').textContent='⏸ Tạm dừng';speak();
 }
 function pauseResume(){
@@ -162,7 +207,7 @@ async function pipe(bytes,stream){var rs=new Blob([bytes]).stream().pipeThrough(
 async function makeLink(){
   var t=$('text').value.trim();
   if(!t){$('shmsg').textContent='Hãy nhập văn bản trước.';return}
-  var data=JSON.stringify({t:t,n:$('min').value,r:$('rep').value,a:$('p1').value,b:$('p2').value,s:$('rate').value});
+  var data=JSON.stringify({t:t,n:$('min').value,r:$('rep').value,a:$('p1').value,b:$('p2').value,s:$('rate').value,k:$('kw').value});
   var bytes=new TextEncoder().encode(data),tag='t';
   try{if(window.CompressionStream){bytes=await pipe(bytes,new CompressionStream('deflate-raw'));tag='d'}}catch(e){bytes=new TextEncoder().encode(data);tag='t'}
   var link=location.href.split('#')[0]+'#'+tag+'='+b64u(bytes);
@@ -187,6 +232,7 @@ async function loadFromHash(){
     if(o.n)$('min').value=o.n;if(o.r)$('rep').value=o.r;
     if(o.a!=null)$('p1').value=o.a;if(o.b!=null)$('p2').value=o.b;
     if(o.s){$('rate').value=o.s;$('rv').textContent=o.s}
+    if(o.k)$('kw').value=o.k;
     $('shmsg').textContent='Đã tải văn bản từ link chia sẻ.';
   }catch(e){$('shmsg').textContent='Link chia sẻ không hợp lệ hoặc bị cắt mất một phần.'}
 }
