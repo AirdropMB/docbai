@@ -24,6 +24,7 @@ input[type=range]{width:100%}
 button{font:inherit;padding:9px 16px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--text);cursor:pointer}
 button.primary{background:var(--accent);color:var(--accent-t);border-color:var(--accent)}
 .now{font-size:1.5rem;text-align:center;padding:22px 10px;min-height:80px;display:flex;align-items:center;justify-content:center}
+.nl{text-align:center;font-weight:600;color:var(--accent);min-height:1.5em}
 .status{text-align:center;color:var(--muted);font-size:.9rem}
 .bar{height:6px;background:var(--line);border-radius:3px;margin:10px 0;overflow:hidden}
 .bar>div{height:100%;width:0;background:var(--accent);transition:width .2s}
@@ -59,11 +60,13 @@ button.primary{background:var(--accent);color:var(--accent-t);border-color:var(-
 </div>
 <div class="row" style="margin-top:10px">
 <label class="chk"><input type="checkbox" id="show" checked> Hiện cụm đang đọc</label>
+<label class="chk"><input type="checkbox" id="sayNl" checked> Đọc to "xuống dòng" khi hết dòng</label>
 </div>
 </div>
 
 <div class="card">
 <div class="now" id="now">—</div>
+<div class="nl" id="nl"></div>
 <div class="bar"><div id="prog"></div></div>
 <div class="status" id="status">Sẵn sàng</div>
 <div class="row" style="justify-content:center;margin-top:12px">
@@ -78,7 +81,7 @@ button.primary{background:var(--accent);color:var(--accent-t);border-color:var(-
 <script>
 var chunks=[],idx=0,rep=0,state='stop',timer=null,token=0;
 var $=function(i){return document.getElementById(i)};
-var voices=[],player=null,wd=null,startNote='';
+var voices=[],player=null,wd=null,startNote='',breaks=[];
 function loadVoices(){
   voices=('speechSynthesis' in window)?speechSynthesis.getVoices():[];
   var sel=$('voice'),cur=sel.value||'online';sel.innerHTML='';
@@ -103,39 +106,45 @@ function findStart(words,kw,norm){
   return -1;
 }
 function build(){
-  var words=$('text').value.trim().split(/\s+/).filter(Boolean);
+  var lines=$('text').value.split(/\r?\n/),items=[],blank=0;
+  lines.forEach(function(ln){
+    var ws=ln.trim().split(/\s+/).filter(Boolean);
+    if(!ws.length){blank++;return}
+    if(items.length)items[items.length-1].br=blank>0?2:1;
+    blank=0;
+    ws.forEach(function(w){items.push({w:w,br:0})});
+  });
   startNote='';
   var kw=($('kw').value||'').trim();
-  if(kw&&words.length){
-    var st=findStart(words,kw,normA);
-    if(st<0)st=findStart(words,kw,normB);
+  if(kw&&items.length){
+    var strs=items.map(function(x){return x.w});
+    var st=findStart(strs,kw,normA);
+    if(st<0)st=findStart(strs,kw,normB);
     if(st<0)return 'Không tìm thấy "'+kw+'" trong văn bản.';
-    words=words.slice(st);
+    items=items.slice(st);
     startNote=' · bắt đầu từ "'+kw+'"';
   }
-  var a=Math.max(1,parseInt($('min').value)||1),b=a;
-  chunks=[];var i=0;
-  while(i<words.length){var n=a+Math.floor(Math.random()*(b-a+1));chunks.push(words.slice(i,i+n).join(' '));i+=n}
+  var a=Math.max(1,parseInt($('min').value)||1),i=0;
+  chunks=[];breaks=[];
+  while(i<items.length){
+    var parts=[],br=0,j=0;
+    while(j<a&&i<items.length){var it=items[i++];parts.push(it.w);j++;if(it.br){br=it.br;break}}
+    chunks.push(parts.join(' '));breaks.push(br);
+  }
   return true;
 }
 function ui(){
+  $('nl').textContent='';
   var r=Math.max(1,parseInt($('rep').value)||1);
   $('now').textContent=chunks.length&&$('show').checked?chunks[idx]||'—':(chunks.length?'• • •':'—');
   $('prog').style.width=chunks.length?(idx/chunks.length*100)+'%':'0';
   $('status').textContent=chunks.length?('Cụm '+Math.min(idx+1,chunks.length)+'/'+chunks.length+' · lần đọc '+Math.min(rep+1,r)+'/'+r+startNote):'Sẵn sàng';
 }
-function speak(){
-  if(state!=='play')return;
-  if(idx>=chunks.length){state='stop';$('prog').style.width='100%';$('status').textContent='Đã đọc xong ✔';$('go').textContent='▶ Bắt đầu';return}
-  ui();
-  var my=++token;
+function say(text,my,cb){
   var done=function(){
     clearTimeout(wd);
     if(my!==token||state!=='play')return;
-    var r=Math.max(1,parseInt($('rep').value)||1);
-    rep++;
-    if(rep<r)timer=setTimeout(speak,(parseFloat($('p1').value)||0)*1000);
-    else{rep=0;idx++;timer=setTimeout(speak,(parseFloat($('p2').value)||0)*1000)}
+    cb();
   };
   if($('voice').value==='online'){
     if(!player)player=new Audio();
@@ -151,7 +160,7 @@ function speak(){
       };
       clearTimeout(wd);
       player.onended=null;player.onerror=null;
-      player.src='https://translate.google.com/translate_tts?ie=UTF-8&client='+clients[k]+'&tl=vi&q='+encodeURIComponent(chunks[idx]);
+      player.src='https://translate.google.com/translate_tts?ie=UTF-8&client='+clients[k]+'&tl=vi&q='+encodeURIComponent(text);
       player.defaultPlaybackRate=player.playbackRate=parseFloat($('rate').value);
       player.onended=done;
       player.onerror=fail;
@@ -171,12 +180,31 @@ function speak(){
     tryPlay(0);
     return;
   }
-  var u=new SpeechSynthesisUtterance(chunks[idx]);
+  var u=new SpeechSynthesisUtterance(text);
   var v=voices[$('voice').value];
   if(v){u.voice=v;u.lang=v.lang}else u.lang='vi-VN';
   u.rate=parseFloat($('rate').value);
   u.onend=done;
   speechSynthesis.speak(u);
+}
+function speak(){
+  if(state!=='play')return;
+  if(idx>=chunks.length){state='stop';$('prog').style.width='100%';$('status').textContent='Đã đọc xong ✔';$('go').textContent='▶ Bắt đầu';return}
+  ui();
+  var my=++token;
+  say(chunks[idx],my,function(){
+    var r=Math.max(1,parseInt($('rep').value)||1);
+    rep++;
+    if(rep<r){timer=setTimeout(speak,(parseFloat($('p1').value)||0)*1000);return}
+    rep=0;
+    var br=breaks[idx]||0;
+    var after=function(){idx++;timer=setTimeout(speak,(parseFloat($('p2').value)||0)*1000)};
+    if(br>0){
+      var label=br>1?'xuống đoạn mới':'xuống dòng';
+      $('nl').textContent=(br>1?'¶ ':'↵ ')+label.charAt(0).toUpperCase()+label.slice(1);
+      if($('sayNl').checked)say(label,my,after);else after();
+    }else after();
+  });
 }
 function halt(){token++;clearTimeout(timer);clearTimeout(wd);if(player){player.onended=null;player.onerror=null;player.pause()}if('speechSynthesis' in window)speechSynthesis.cancel()}
 function startPlay(){
